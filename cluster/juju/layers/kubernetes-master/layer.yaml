@@ -1,6 +1,7 @@
 repo: https://github.com/kubernetes/kubernetes.git
 includes:
   - 'layer:basic'
+  - 'layer:snap'
   - 'layer:tls-client'
   - 'layer:leadership'
   - 'layer:debug'
@@ -15,11 +16,36 @@ options:
   basic:
     packages:
       - socat
+  snap:
+    kubectl:
+      channel: edge
+      devmode: false
+      jailmode: false
+      dangerous: false
+      classic: true
+    kube-apiserver:
+      channel: edge
+      devmode: false
+      jailmode: false
+      dangerous: false
+      classic: false
+    kube-controller-manager:
+      channel: edge
+      devmode: false
+      jailmode: false
+      dangerous: false
+      classic: false
+    kube-scheduler:
+      channel: edge
+      devmode: false
+      jailmode: false
+      dangerous: false
+      classic: false
   tls-client:
-    ca_certificate_path: '/srv/kubernetes/ca.crt'
-    server_certificate_path: '/srv/kubernetes/server.crt'
-    server_key_path: '/srv/kubernetes/server.key'
-    client_certificate_path: '/srv/kubernetes/client.crt'
-    client_key_path: '/srv/kubernetes/client.key'
+    ca_certificate_path: '/root/cdk/ca.crt'
+    server_certificate_path: '/root/cdk/server.crt'
+    server_key_path: '/root/cdk/server.key'
+    client_certificate_path: '/root/cdk/client.crt'
+    client_key_path: '/root/cdk/client.key'
 tactics:
   - 'tactics.update_addons.UpdateAddonsTactic'

@@ -2,6 +2,7 @@ repo: https://github.com/kubernetes/kubernetes.git
 includes:
   - 'layer:basic'
   - 'layer:debug'
+  - 'layer:snap'
   - 'layer:docker'
   - 'layer:nagios'
   - 'layer:tls-client'
@@ -14,6 +15,25 @@ options:
       - 'nfs-common'
       - 'ceph-common'
       - 'socat'
+  snap:
+    kubectl:
+      channel: edge
+      devmode: false
+      jailmode: false
+      dangerous: false
+      classic: true
+    kubelet:
+      channel: edge
+      devmode: false
+      jailmode: false
+      dangerous: false
+      classic: true
+    kube-proxy:
+      channel: edge
+      devmode: false
+      jailmode: false
+      dangerous: false
+      classic: true
   tls-client:
     ca_certificate_path: '/srv/kubernetes/ca.crt'
     server_certificate_path: '/srv/kubernetes/server.crt'

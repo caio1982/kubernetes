@@ -45,6 +45,9 @@ from charmhelpers.fetch import apt_install
 from charmhelpers.contrib.charmsupport import nrpe
 
 
+os.environ['PATH'] += os.pathsep + os.path.join(os.sep, 'snap', 'bin')
+
+
 dashboard_templates = [
     'dashboard-controller.yaml',
     'dashboard-service.yaml',
@@ -80,58 +83,9 @@ def reset_states_for_delivery():
         hookenv.log('Stopping {0} service.'.format(service))
         host.service_stop(service)
     remove_state('kubernetes-master.components.started')
-    remove_state('kubernetes-master.components.installed')
     remove_state('kube-dns.available')
     remove_state('kubernetes.dashboard.available')
-
-
-@when_not('kubernetes-master.components.installed')
-def install():
-    '''Unpack and put the Kubernetes master files on the path.'''
-    # Get the resource via resource_get
-    try:
-        archive = hookenv.resource_get('kubernetes')
-    except Exception:
-        message = 'Error fetching the kubernetes resource.'
-        hookenv.log(message)
-        hookenv.status_set('blocked', message)
-        return
-
-    if not archive:
-        hookenv.log('Missing kubernetes resource.')
-        hookenv.status_set('blocked', 'Missing kubernetes resource.')
-        return
-
-    # Handle null resource publication, we check if filesize < 1mb
-    filesize = os.stat(archive).st_size
-    if filesize < 1000000:
-        hookenv.status_set('blocked', 'Incomplete kubernetes resource.')
-        return
-
-    hookenv.status_set('maintenance', 'Unpacking kubernetes resource.')
-    files_dir = os.path.join(hookenv.charm_dir(), 'files')
-
-    os.makedirs(files_dir, exist_ok=True)
-
-    command = 'tar -xvzf {0} -C {1}'.format(archive, files_dir)
-    hookenv.log(command)
-    check_call(split(command))
-
-    apps = [
-        {'name': 'kube-apiserver', 'path': '/usr/local/bin'},
-        {'name': 'kube-controller-manager', 'path': '/usr/local/bin'},
-        {'name': 'kube-scheduler', 'path': '/usr/local/bin'},
-        {'name': 'kubectl', 'path': '/usr/local/bin'},
-    ]
-
-    for app in apps:
-        unpacked = '{}/{}'.format(files_dir, app['name'])
-        app_path = os.path.join(app['path'], app['name'])
-        install = ['install', '-v', '-D', unpacked, app_path]
-        hookenv.log(install)
-        check_call(install)
-
-    set_state('kubernetes-master.components.installed')
+    remove_state('kubernetes-master.app_version.set')
 
 
 @when('cni.connected')
@@ -150,9 +104,9 @@ def setup_leader_authentication():
     api_opts = FlagManager('kube-apiserver')
     controller_opts = FlagManager('kube-controller-manager')
 
-    service_key = '/etc/kubernetes/serviceaccount.key'
-    basic_auth = '/srv/kubernetes/basic_auth.csv'
-    known_tokens = '/srv/kubernetes/known_tokens.csv'
+    service_key = '/root/cdk/serviceaccount.key'
+    basic_auth = '/root/cdk/basic_auth.csv'
+    known_tokens = '/root/cdk/known_tokens.csv'
 
     api_opts.add('--basic-auth-file', basic_auth)
     api_opts.add('--token-auth-file', known_tokens)
@@ -165,7 +119,7 @@ def setup_leader_authentication():
         setup_tokens(None, 'kubelet', 'kubelet')
         setup_tokens(None, 'kube_proxy', 'kube_proxy')
     # Generate the default service account token key
-    os.makedirs('/etc/kubernetes', exist_ok=True)
+    os.makedirs('/root/cdk', exist_ok=True)
 
     cmd = ['openssl', 'genrsa', '-out', service_key,
            '2048']
@@ -195,14 +149,13 @@ def setup_non_leader_authentication():
     api_opts = FlagManager('kube-apiserver')
     controller_opts = FlagManager('kube-controller-manager')
 
-    service_key = '/etc/kubernetes/serviceaccount.key'
-    basic_auth = '/srv/kubernetes/basic_auth.csv'
-    known_tokens = '/srv/kubernetes/known_tokens.csv'
+    service_key = '/root/cdk/serviceaccount.key'
+    basic_auth = '/root/cdk/basic_auth.csv'
+    known_tokens = '/root/cdk/known_tokens.csv'
 
     # This races with other codepaths, and seems to require being created first
     # This block may be extracted later, but for now seems to work as intended
-    os.makedirs('/etc/kubernetes', exist_ok=True)
-    os.makedirs('/srv/kubernetes', exist_ok=True)
+    os.makedirs('/root/cdk', exist_ok=True)
 
     hookenv.status_set('maintenance', 'Rendering authentication templates.')
 
@@ -232,14 +185,15 @@ def setup_non_leader_authentication():
     set_state('authentication.setup')
 
 
-@when('kubernetes-master.components.installed')
+@when_not('kubernetes-master.app_version.set')
 def set_app_version():
     ''' Declare the application version to juju '''
     version = check_output(['kube-apiserver', '--version'])
     hookenv.application_version_set(version.split(b' v')[-1].rstrip())
+    set_state('kubernetes-master.app_version.set')
 
 
-@when('kube-dns.available', 'kubernetes-master.components.installed')
+@when('kube-dns.available')
 def idle_status():
     ''' Signal at the end of the run that we are running. '''
     if not all_kube_system_pods_running():
@@ -251,25 +205,24 @@ def idle_status():
         hookenv.status_set('active', 'Kubernetes master running.')
 
 
-@when('etcd.available', 'kubernetes-master.components.installed',
-      'certificates.server.cert.available')
+@when('etcd.available', 'certificates.server.cert.available')
 @when_not('kubernetes-master.components.started')
 def start_master(etcd, tls):
     '''Run the Kubernetes master components.'''
     hookenv.status_set('maintenance',
-                       'Rendering the Kubernetes master systemd files.')
+                       'Configuring the Kubernetes master services.')
     freeze_service_cidr()
     handle_etcd_relation(etcd)
-    # Use the etcd relation object to render files with etcd information.
-    render_files()
+    configure_master_services()
     hookenv.status_set('maintenance',
                        'Starting the Kubernetes master services.')
+
     services = ['kube-apiserver',
                 'kube-controller-manager',
                 'kube-scheduler']
     for service in services:
-        hookenv.log('Starting {0} service.'.format(service))
-        host.service_start(service)
+        host.service_restart('snap.%s.daemon' % service)
+
     hookenv.open_port(6443)
     set_state('kubernetes-master.components.started')
 
@@ -381,8 +334,8 @@ def start_kube_dns():
     set_state('kube-dns.available')
 
 
-@when('kubernetes-master.components.installed', 'loadbalancer.available',
-      'certificates.ca.available', 'certificates.client.cert.available')
+@when('loadbalancer.available', 'certificates.ca.available',
+      'certificates.client.cert.available')
 def loadbalancer_kubeconfig(loadbalancer, ca, client):
     # Get the potential list of loadbalancers from the relation object.
     hosts = loadbalancer.get_addresses_ports()
@@ -394,8 +347,7 @@ def loadbalancer_kubeconfig(loadbalancer, ca, client):
     build_kubeconfig(server)
 
 
-@when('kubernetes-master.components.installed',
-      'certificates.ca.available', 'certificates.client.cert.available')
+@when('certificates.ca.available', 'certificates.client.cert.available')
 @when_not('loadbalancer.available')
 def create_self_config(ca, client):
     '''Create a kubernetes configuration for the master unit.'''
@@ -530,7 +482,7 @@ def remove_nrpe_config(nagios=None):
 def create_addon(template, context):
     '''Create an addon from a template'''
     source = 'addons/' + template
-    target = '/etc/kubernetes/addons/' + template
+    target = '/root/cdk/addons/' + template
     render(source, target, context)
     cmd = ['kubectl', 'apply', '-f', target]
     check_call(cmd)
@@ -538,7 +490,7 @@ def create_addon(template, context):
 
 def delete_addon(template):
     '''Delete an addon from a template'''
-    target = '/etc/kubernetes/addons/' + template
+    target = '/root/cdk/addons/' + template
     cmd = ['kubectl', 'delete', '-f', target]
     call(cmd)
 
@@ -584,10 +536,6 @@ def build_kubeconfig(server):
         kubeconfig_path = os.path.join(destination_directory, 'config')
         # Create the kubeconfig on this system so users can access the cluster.
         create_kubeconfig(kubeconfig_path, server, ca, key, cert)
-        # Copy the kubectl binary to the destination directory.
-        cmd = ['install', '-v', '-o', 'ubuntu', '-g', 'ubuntu',
-               '/usr/local/bin/kubectl', destination_directory]
-        check_call(cmd)
         # Make the config file readable by the ubuntu users so juju scp works.
         cmd = ['chown', 'ubuntu:ubuntu', kubeconfig_path]
         check_call(cmd)
@@ -636,7 +584,7 @@ def handle_etcd_relation(reldata):
     etcd declares itself as available'''
     connection_string = reldata.get_connection_string()
     # Define where the etcd tls files will be kept.
-    etcd_dir = '/etc/ssl/etcd'
+    etcd_dir = '/root/cdk/etcd'
     # Create paths to the etcd client ca, key, and cert file locations.
     ca = os.path.join(etcd_dir, 'client-ca.pem')
     key = os.path.join(etcd_dir, 'client-key.pem')
@@ -650,33 +598,23 @@ def handle_etcd_relation(reldata):
     # Never use stale data, always prefer whats coming in during context
     # building. if its stale, its because whats in unitdata is stale
     data = api_opts.data
-    if data.get('--etcd-servers-strict') or data.get('--etcd-servers'):
-        api_opts.destroy('--etcd-cafile')
-        api_opts.destroy('--etcd-keyfile')
-        api_opts.destroy('--etcd-certfile')
-        api_opts.destroy('--etcd-servers', strict=True)
-        api_opts.destroy('--etcd-servers')
+    if data.get('etcd-servers-strict') or data.get('etcd-servers'):
+        api_opts.destroy('etcd-cafile')
+        api_opts.destroy('etcd-keyfile')
+        api_opts.destroy('etcd-certfile')
+        api_opts.destroy('etcd-servers', strict=True)
+        api_opts.destroy('etcd-servers')
 
     # Set the apiserver flags in the options manager
-    api_opts.add('--etcd-cafile', ca)
-    api_opts.add('--etcd-keyfile', key)
-    api_opts.add('--etcd-certfile', cert)
-    api_opts.add('--etcd-servers', connection_string, strict=True)
+    api_opts.add('etcd-cafile', ca)
+    api_opts.add('etcd-keyfile', key)
+    api_opts.add('etcd-certfile', cert)
+    api_opts.add('etcd-servers', connection_string, strict=True)
 
 
-def render_files():
-    '''Use jinja templating to render the docker-compose.yml and master.json
-    file to contain the dynamic data for the configuration files.'''
-    context = {}
-    config = hookenv.config()
-    # Add the charm configuration data to the context.
-    context.update(config)
-
-    # Update the context with extra values: arch, and networking information
-    context.update({'arch': arch(),
-                    'master_address': hookenv.unit_get('private-address'),
-                    'public_address': hookenv.unit_get('public-address'),
-                    'private_address': hookenv.unit_get('private-address')})
+def configure_master_services():
+    ''' Add remaining flags for the master services and configure snaps to use
+    them '''
 
     api_opts = FlagManager('kube-apiserver')
     controller_opts = FlagManager('kube-controller-manager')
@@ -689,67 +627,54 @@ def render_files():
     server_key_path = layer_options.get('server_key_path')
 
     # Handle static options for now
-    api_opts.add('--min-request-timeout', '300')
-    api_opts.add('--v', '4')
-    api_opts.add('--client-ca-file', ca_cert_path)
-    api_opts.add('--tls-cert-file', server_cert_path)
-    api_opts.add('--tls-private-key-file', server_key_path)
-
-    scheduler_opts.add('--v', '2')
+    api_opts.add('min-request-timeout', '300')
+    api_opts.add('v', '4')
+    api_opts.add('client-ca-file', ca_cert_path)
+    api_opts.add('tls-cert-file', server_cert_path)
+    api_opts.add('tls-private-key-file', server_key_path)
+    api_opts.add('logtostderr', 'true')
+    api_opts.add('allow-privileged', 'false')
+    api_opts.add('insecure-bind-address', '127.0.0.1')
+    api_opts.add('insecure-port', '8080')
+    api_opts.add('admission-control',
+                 'NamespaceLifecycle,LimitRanger,ServiceAccount,ResourceQuota',
+                 strict=True)
 
     # Default to 3 minute resync. TODO: Make this configureable?
-    controller_opts.add('--min-resync-period', '3m')
-    controller_opts.add('--v', '2')
-    controller_opts.add('--root-ca-file', ca_cert_path)
+    controller_opts.add('min-resync-period', '3m')
+    controller_opts.add('v', '2')
+    controller_opts.add('root-ca-file', ca_cert_path)
+    controller_opts.add('logtostderr', 'true')
+    controller_opts.add('master', 'http://127.0.0.1:8080')
 
-    context.update({'kube_apiserver_flags': api_opts.to_s(),
-                    'kube_scheduler_flags': scheduler_opts.to_s(),
-                    'kube_controller_manager_flags': controller_opts.to_s()})
+    scheduler_opts.add('v', '2')
+    scheduler_opts.add('logtostderr', 'true')
+    scheduler_opts.add('master', 'http://127.0.0.1:8080')
 
-    # Render the configuration files that contains parameters for
-    # the apiserver, scheduler, and controller-manager
-    render_service('kube-apiserver', context)
-    render_service('kube-controller-manager', context)
-    render_service('kube-scheduler', context)
-
-    # explicitly render the generic defaults file
-    render('kube-defaults.defaults', '/etc/default/kube-defaults', context)
-
-    # when files change on disk, we need to inform systemd of the changes
-    call(['systemctl', 'daemon-reload'])
-    call(['systemctl', 'enable', 'kube-apiserver'])
-    call(['systemctl', 'enable', 'kube-controller-manager'])
-    call(['systemctl', 'enable', 'kube-scheduler'])
-
-
-def render_service(service_name, context):
-    '''Render the systemd service by name.'''
-    unit_directory = '/lib/systemd/system'
-    source = '{0}.service'.format(service_name)
-    target = os.path.join(unit_directory, '{0}.service'.format(service_name))
-    render(source, target, context)
-    conf_directory = '/etc/default'
-    source = '{0}.defaults'.format(service_name)
-    target = os.path.join(conf_directory, service_name)
-    render(source, target, context)
+    cmd = ['snap', 'set', 'kube-apiserver'] + api_opts.to_s().split(' ')
+    check_call(cmd)
+    cmd = ['snap', 'set', 'kube-controller-manager'] + controller_opts.to_s().split(' ')
+    check_call(cmd)
+    cmd = ['snap', 'set', 'kube-scheduler'] + scheduler_opts.to_s().split(' ')
+    check_call(cmd)
 
 
 def setup_basic_auth(username='admin', password='admin', user='admin'):
     '''Create the htacces file and the tokens.'''
-    srv_kubernetes = '/srv/kubernetes'
-    if not os.path.isdir(srv_kubernetes):
-        os.makedirs(srv_kubernetes)
-    htaccess = os.path.join(srv_kubernetes, 'basic_auth.csv')
+    root_cdk = '/root/cdk'
+    if not os.path.isdir(root_cdk):
+        os.makedirs(root_cdk)
+    htaccess = os.path.join(root_cdk, 'basic_auth.csv')
     with open(htaccess, 'w') as stream:
         stream.write('{0},{1},{2}'.format(username, password, user))
 
 
 def setup_tokens(token, username, user):
     '''Create a token file for kubernetes authentication.'''
-    srv_kubernetes = '/srv/kubernetes'
-    if not os.path.isdir(srv_kubernetes):
-        os.makedirs(srv_kubernetes)
-    known_tokens = os.path.join(srv_kubernetes, 'known_tokens.csv')
+    root_cdk = '/root/cdk'
+    if not os.path.isdir(root_cdk):
+        os.makedirs(root_cdk)
+    known_tokens = os.path.join(root_cdk, 'known_tokens.csv')
     if not token:
         alpha = string.ascii_letters + string.digits
         token = ''.join(random.SystemRandom().choice(alpha) for _ in range(32))
