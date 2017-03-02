@@ -97,7 +97,6 @@ def configure_cni(cni):
 
 
 @when('leadership.is_leader')
-@when('kubernetes-master.components.installed')
 @when_not('authentication.setup')
 def setup_leader_authentication():
     '''Setup basic authentication and token access for the cluster.'''
@@ -108,9 +107,8 @@ def setup_leader_authentication():
     basic_auth = '/root/cdk/basic_auth.csv'
     known_tokens = '/root/cdk/known_tokens.csv'
 
-    api_opts.add('--basic-auth-file', basic_auth)
-    api_opts.add('--token-auth-file', known_tokens)
-    api_opts.add('--service-cluster-ip-range', service_cidr())
+    api_opts.add('basic-auth-file', basic_auth)
+    api_opts.add('token-auth-file', known_tokens)
     hookenv.status_set('maintenance', 'Rendering authentication templates.')
     if not os.path.isfile(basic_auth):
         setup_basic_auth('admin', 'admin', 'admin')
@@ -124,8 +122,8 @@ def setup_leader_authentication():
     cmd = ['openssl', 'genrsa', '-out', service_key,
            '2048']
     check_call(cmd)
-    api_opts.add('--service-account-key-file', service_key)
-    controller_opts.add('--service-account-private-key-file', service_key)
+    api_opts.add('service-account-key-file', service_key)
+    controller_opts.add('service-account-private-key-file', service_key)
 
     # read service account key for syndication
     leader_data = {}
@@ -143,7 +141,6 @@ def setup_leader_authentication():
 
 
 @when_not('leadership.is_leader')
-@when('kubernetes-master.components.installed')
 @when_not('authentication.setup')
 def setup_non_leader_authentication():
     api_opts = FlagManager('kube-apiserver')
@@ -176,11 +173,10 @@ def setup_non_leader_authentication():
             with open(k, 'w+') as fp:
                 fp.write(contents)
 
-    api_opts.add('--basic-auth-file', basic_auth)
-    api_opts.add('--token-auth-file', known_tokens)
-    api_opts.add('--service-cluster-ip-range', service_cidr())
-    api_opts.add('--service-account-key-file', service_key)
-    controller_opts.add('--service-account-private-key-file', service_key)
+    api_opts.add('basic-auth-file', basic_auth)
+    api_opts.add('token-auth-file', known_tokens)
+    api_opts.add('service-account-key-file', service_key)
+    controller_opts.add('service-account-private-key-file', service_key)
 
     set_state('authentication.setup')
 
@@ -205,7 +201,8 @@ def idle_status():
         hookenv.status_set('active', 'Kubernetes master running.')
 
 
-@when('etcd.available', 'certificates.server.cert.available')
+@when('etcd.available', 'certificates.server.cert.available',
+      'authentication.setup')
 @when_not('kubernetes-master.components.started')
 def start_master(etcd, tls):
     '''Run the Kubernetes master components.'''
@@ -627,6 +624,7 @@ def configure_master_services():
     server_key_path = layer_options.get('server_key_path')
 
     # Handle static options for now
+    api_opts.add('service-cluster-ip-range', service_cidr())
     api_opts.add('min-request-timeout', '300')
     api_opts.add('v', '4')
     api_opts.add('client-ca-file', ca_cert_path)
