@@ -636,8 +636,14 @@ def configure_master_services():
     api_opts.add('allow-privileged', 'false')
     api_opts.add('insecure-bind-address', '127.0.0.1')
     api_opts.add('insecure-port', '8080')
-    api_opts.add('admission-control',
-                 'NamespaceLifecycle,LimitRanger,ServiceAccount,ResourceQuota',
+    api_opts.add('admission-control', ','.join([
+                     'NamespaceLifecycle',
+                     'LimitRanger',
+                     'ServiceAccount',
+                     'ResourceQuota',
+                     # FIXME: add this back in for 1.6
+                     # 'DefaultTolerationSeconds'
+                 ]),
                  strict=True)
 
     # Default to 3 minute resync. TODO: Make this configureable?
@@ -653,7 +659,10 @@ def configure_master_services():
 
     cmd = ['snap', 'set', 'kube-apiserver'] + api_opts.to_s().split(' ')
     check_call(cmd)
-    cmd = ['snap', 'set', 'kube-controller-manager'] + controller_opts.to_s().split(' ')
+    cmd = (
+        ['snap', 'set', 'kube-controller-manager'] +
+        controller_opts.to_s().split(' ')
+    )
     check_call(cmd)
     cmd = ['snap', 'set', 'kube-scheduler'] + scheduler_opts.to_s().split(' ')
     check_call(cmd)
