@@ -34,7 +34,7 @@ from charmhelpers.core.host import service_stop, service_restart
 from charmhelpers.contrib.charmsupport import nrpe
 
 
-kubeconfig_path = '/srv/kubernetes/config'
+kubeconfig_path = '/root/cdk/kubeconfig'
 
 os.environ['PATH'] += os.pathsep + os.path.join(os.sep, 'snap', 'bin')
 
@@ -204,9 +204,9 @@ def render_and_launch_ingress():
     else:
         hookenv.log('Deleting the http backend and ingress.')
         kubectl_manifest('delete',
-                         '/etc/kubernetes/addons/default-http-backend.yaml')
+                         '/root/cdk/addons/default-http-backend.yaml')
         kubectl_manifest('delete',
-                         '/etc/kubernetes/addons/ingress-replication-controller.yaml')  # noqa
+                         '/root/cdk/addons/ingress-replication-controller.yaml')  # noqa
         hookenv.close_port(80)
         hookenv.close_port(443)
 
@@ -341,7 +341,7 @@ def launch_default_ingress_controller():
     ''' Launch the Kubernetes ingress controller & default backend (404) '''
     context = {}
     context['arch'] = arch()
-    addon_path = '/etc/kubernetes/addons/{}'
+    addon_path = '/root/cdk/addons/{}'
     manifest = addon_path.format('default-http-backend.yaml')
     # Render the default http backend (404) replicationcontroller manifest
     render('default-http-backend.yaml', manifest, context)

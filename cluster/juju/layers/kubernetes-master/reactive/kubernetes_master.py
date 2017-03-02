@@ -136,7 +136,7 @@ def setup_leader_authentication():
     # this is slightly opaque, but we are sending file contents under its file
     # path as a key.
     # eg:
-    # {'/etc/kubernetes/serviceaccount.key': 'RSA:2471731...'}
+    # {'/root/cdk/serviceaccount.key': 'RSA:2471731...'}
     charms.leadership.leader_set(leader_data)
 
     set_state('authentication.setup')
